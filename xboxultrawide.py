@@ -1,13 +1,21 @@
 """
+Xbox Stretch - remove as barras pretas da transmissão do app Xbox no Windows.
+
+Como funciona:
+  1. Você escolhe a janela.
+  2. Ao clicar em Iniciar, o app cria uma janela sobreposta (overlay) em tela cheia
+     e pede ao DWM para desenhar nela uma janela do Xbox, recortando só a área 16:9 e esticando para preencher tudo.
+  3. Pausar remove o overlay e volta ao normal.
+
 Atalho global: Ctrl + Alt + X  (inicia / pausa)
-Requisitos: Windows 10/11 e Python 3.8+ (só biblioteca padrão, nada para instalar).
+
+Requisitos: Windows 10/11 e Python 3.8+.
 """
 import ctypes
 import threading
 import tkinter as tk
 from ctypes import wintypes as wt
 from tkinter import ttk
-
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -19,7 +27,6 @@ except Exception:
 
 user32 = ctypes.windll.user32
 dwm = ctypes.windll.dwmapi
-
 
 class RECT(ctypes.Structure):
     _fields_ = [("left", wt.LONG), ("top", wt.LONG), ("right", wt.LONG), ("bottom", wt.LONG)]
@@ -98,7 +105,7 @@ def proc_name(hwnd):
     """Nome do .exe dono da janela (vazio se não for possível ler)."""
     pid = wt.DWORD()
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    h = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+    h = kernel32.OpenProcess(0x1000, False, pid.value)  
     if not h:
         return ""
     buf = ctypes.create_unicode_buffer(520)
@@ -110,6 +117,10 @@ def proc_name(hwnd):
 
 def list_windows(show_all=False):
     """Retorna [(hwnd, titulo, processo)].
+
+    Modo normal: só janelas visíveis.
+    show_all: inclui janelas sem título, ocultas pelo UWP (minimizadas / outra
+    área de trabalho virtual) e mostra a classe da janela quando não há título.
     """
     found = []
     xbox_keys = ("xbox", "gamingapp", "gamebar")
@@ -119,9 +130,9 @@ def list_windows(show_all=False):
         is_xbox = False
         if not show_all:
             cloaked = ctypes.c_int(0)
-            dwm.DwmGetWindowAttribute(hwnd, 14, ctypes.byref(cloaked), 4)  # DWMWA_CLOAKED
+            dwm.DwmGetWindowAttribute(hwnd, 14, ctypes.byref(cloaked), 4)  
             if not user32.IsWindowVisible(hwnd) or cloaked.value:
-                # janela oculta/suspensa
+                # janela oculta/suspensa: só entra se for de um processo do Xbox
                 pname = proc_name(hwnd)
                 is_xbox = any(k in pname.lower() for k in xbox_keys)
                 if not is_xbox:
@@ -145,7 +156,6 @@ def list_windows(show_all=False):
 
     user32.EnumWindows(EnumProc(cb), 0)
     return found
-
 
 
 class App:
@@ -183,11 +193,21 @@ class App:
         self.root.after(300, self.tick)
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
 
-    # ---- lista de janela
+    # ---- lista de janelas
     def refresh(self):
         self.windows = [w for w in list_windows(self.all_var.get()) if w[1] != "Xbox Stretch"]
-        # Xbox primeiro na lista, para ficar fácil de achar
-        self.windows.sort(key=lambda w: 0 if ("xbox" in w[1].lower() or "xbox" in w[2].lower()) else 1)
+        # Ordem: "Xbox" + ApplicationFrameHost.exe primeiro, depois outras janelas do Xbox
+        def prioridade(w):
+            titulo, proc = w[1].strip().lower(), w[2].lower()
+            if titulo == "xbox" and proc == "applicationframehost.exe":
+                return 0
+            if titulo == "xbox":
+                return 1
+            if "xbox" in titulo or "xbox" in proc:
+                return 2
+            return 3
+
+        self.windows.sort(key=prioridade)
         titles = [f"{t}  —  {p or '?'}  [{h}]" for h, t, p in self.windows]
         self.combo["values"] = titles
         self.combo.set("")
@@ -206,7 +226,7 @@ class App:
             if msg.message == WM_HOTKEY:
                 self.hotkey_flag = True
 
-    # ----foco
+    # ---- foco
     def focus_src(self):
         """Devolve o foco para a janela do Xbox (senão ele pausa os comandos)."""
         if not (self.src_hwnd and user32.IsWindow(self.src_hwnd)):
@@ -230,7 +250,7 @@ class App:
         ex = (ex | WS_EX_NOACTIVATE) if on else (ex & ~WS_EX_NOACTIVATE)
         user32.SetWindowLongPtrW(h, GWL_EXSTYLE, ex)
 
-    # ---- iniciar
+    # ---- iniciar / pausar
     def toggle(self):
         if self.active:
             self.stop()
@@ -293,7 +313,7 @@ class App:
         self.btn.config(text="▶ Iniciar")
         self.status.config(text="Parado  |  Atalho: Ctrl+Alt+X")
 
-    # ----21/9
+    # ---- recorte
     def update_thumb(self):
         if not (self.active and self.thumb):
             return
